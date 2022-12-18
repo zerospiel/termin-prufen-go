@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
@@ -29,9 +30,8 @@ func main() {
 	ctx, cancel := chromedp.NewExecAllocator(context.Background(), chromeOptions...)
 	defer cancel() // allocator
 
-	ctx, cancel = chromedp.NewContext(ctx,
-		chromedp.WithDebugf(log.Printf),
-	)
+	ctx, cancel = chromedp.NewContext(ctx, chromedp.WithDebugf(log.Printf))
+
 	defer cancel() // new tab
 
 	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
@@ -48,6 +48,8 @@ func main() {
 	_ = saveScreenShot
 
 	var buf []byte
+	var citizenshipNodes []*cdp.Node
+	_ = citizenshipNodes
 
 	if err := chromedp.Run(ctx,
 		chromedp.Navigate("https://otv.verwalt-berlin.de/ams/TerminBuchen?lang=en"),
@@ -64,47 +66,89 @@ func main() {
 		// wait the page with a citizenship (number of redirects)
 		chromedp.WaitVisible(`//*[@id="xi-fs-19"]`, chromedp.BySearch),
 		// select Citizenship
-		// chromedp.SetValue(`//*[@id="xi-sel-400"]`, "Russian Federation", chromedp.BySearch),
-		// chromedp.Click(`//*[@id="xi-sel-400"]`, chromedp.BySearch),
-		chromedp.Click(`//*[@id="xi-sel-400"]/option[136]`, chromedp.BySearch),
+		// chromedp.ActionFunc(func(ctx context.Context) error {
+		// 	node, rerr := dom.GetDocument().WithDepth(1).Do(ctx)
+		// 	if rerr != nil {
+		// 		return rerr
+		// 	}
+		// 	q.Q(node) // DEBUG
+		// 	return nil
+		// }),
+		// chromedp.Nodes(`//*[@id="xi-sel-400"]`, &citizenshipNodes, chromedp.BySearch),
+		// chromedp.SetJavascriptAttribute(`//*[@id="xi-sel-400"]`, "", "Russian Federation", chromedp.BySearch),
+		chromedp.SetValue(`//*[@id="xi-sel-400"]`, "160", chromedp.BySearch),
+		chromedp.WaitVisible(`//*[@id="xi-sel-422"]`, chromedp.BySearch),
 		// TODO: uncommenct, kinda works
 		//
 		// select Number of applicants
-		// chromedp.SetValue(`//*[@id="xi-sel-422"]`, "two people", chromedp.BySearch),
-		// chromedp.Click(`//*[@id="xi-sel-422"]`, chromedp.BySearch),
-		// //
-		// // select Do you live in Berlin
-		// chromedp.SetValue(`//*[@id="xi-sel-427"]`, "yes", chromedp.BySearch),
-		// chromedp.Click(`//*[@id="xi-sel-427"]`, chromedp.BySearch),
-		// //
-		// // select Citizenship of the family member
-		// chromedp.SetValue(`//*[@id="xi-sel-428"]`, "Russian Federation", chromedp.BySearch),
-		// chromedp.Click(`//*[@id="xi-sel-428"]`, chromedp.BySearch),
-		// //
-		// // wait for options
-		// chromedp.WaitVisible(`//*[@id="xi-div-30"]`, chromedp.BySearch),
-		// // click on apply for a residence permit
-		// chromedp.Click(`//*[@id="xi-div-30"]/div[1]`, chromedp.BySearch),
-		// // wait for reasons for residance permit
-		// chromedp.WaitVisible(`//*[@id="inner-160-0-1"]`, chromedp.BySearch),
-		// // click economic activity
-		// chromedp.Click(`//*[@id="inner-160-0-1"]/div/div[3]`, chromedp.BySearch),
-		// // click blaukarte
-		// chromedp.Click(`//*[@id="SERVICEWAHL_EN160-0-1-1-324659"]`, chromedp.BySearch),
-		// // wait until Next button
-		// chromedp.WaitVisible(`//*[@id="applicationForm:managedForm"]/div[5]`, chromedp.BySearch),
-		// // click Next button to find termin
-		// chromedp.Click(`//*[@id="applicationForm:managedForm:proceed"]`, chromedp.BySearch),
-		// // wait the result
-		// chromedp.WaitVisible(`//*[@id="footer"]`, chromedp.BySearch),
+		chromedp.SetValue(`//*[@id="xi-sel-422"]`, "2", chromedp.BySearch),
+		chromedp.WaitVisible(`//*[@id="xi-sel-427"]`, chromedp.BySearch),
 		//
-		chromedp.FullScreenshot(&buf, 90)); err != nil {
+		// select Do you live in Berlin
+		chromedp.SetValue(`//*[@id="xi-sel-427"]`, "1", chromedp.BySearch),
+		chromedp.WaitVisible(`//*[@id="xi-sel-428"]`, chromedp.BySearch),
+		//
+		// select Citizenship of the family member
+		chromedp.SetValue(`//*[@id="xi-sel-428"]`, "160-0", chromedp.BySearch),
+		//
+		// wait for options
+		chromedp.WaitVisible(`//*[@id="xi-div-30"]`, chromedp.BySearch),
+		// click on apply for a residence permit
+		chromedp.Click(`//*[@id="xi-div-30"]/div[1]`, chromedp.BySearch),
+		// wait for reasons for residance permit
+		chromedp.WaitVisible(`//*[@id="inner-160-0-1"]`, chromedp.BySearch),
+		// click economic activity
+		chromedp.Click(`//*[@id="inner-160-0-1"]/div/div[3]`, chromedp.BySearch),
+		// click blaukarte
+		chromedp.Click(`//*[@id="SERVICEWAHL_EN160-0-1-1-324659"]`, chromedp.BySearch),
+		// wait until Next button
+		chromedp.WaitVisible(`//*[@id="applicationForm:managedForm"]/div[5]`, chromedp.BySearch),
+		// click Next button to find termin
+		chromedp.Click(`//*[@id="applicationForm:managedForm:proceed"]`, chromedp.BySearch),
+		// wait the result
+		chromedp.WaitVisible(`/html/body/div[1]`, chromedp.BySearch),
+		chromedp.WaitNotVisible(`/html/body/div[1]`, chromedp.BySearch),
+		chromedp.FullScreenshot(&buf, 90),
+	); err != nil {
 		panic(err)
 	}
 
 	if err := os.WriteFile(screenShotFile, buf, 0o644); err != nil {
 		panic(err)
 	}
+
+	// fmt.Println(">>> first screenshot saved")
+
+	// var nodeID cdp.NodeID
+	// nodeID, ok := findValueAmongNodes(citizenshipNodes, "Russian Federation")
+	// if !ok {
+	// 	panic("not exist")
+	// }
+	// fmt.Println(">>>>>>", nodeID)
+	// if err := chromedp.Run(ctx,
+	// 	chromedp.Click([]cdp.NodeID{nodeID}, chromedp.ByNodeID),
+	// 	chromedp.FullScreenshot(&buf, 90),
+	// ); err != nil {
+	// 	panic(err)
+	// }
+
+	// if err := os.WriteFile(screenShotFile, buf, 0o644); err != nil {
+	// 	panic(err)
+	// }
+}
+
+func findValueAmongNodes(nodes []*cdp.Node, value string) (cdp.NodeID, bool) {
+	for _, n := range nodes {
+		for _, c := range n.Children {
+			for _, cc := range c.Children {
+				if cc.NodeValue == value {
+					return c.NodeID, true
+				}
+			}
+		}
+	}
+
+	return 0, false
 }
 
 func makeScreenshot(ctx context.Context, output string) func(context.Context) error {
