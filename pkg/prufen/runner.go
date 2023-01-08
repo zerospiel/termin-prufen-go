@@ -2,21 +2,30 @@ package prufen
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"sync/atomic"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/chromedp"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // TODO: make an iface
 type Runner struct {
-	baseCtx        context.Context
-	opts           []func(*chromedp.ExecAllocator)
-	debugf         func(string, ...any)
-	runTimeout     time.Duration
-	makeScreenshot bool
+	baseCtx                 context.Context
+	debugf                  func(string, ...any)
+	port                    string
+	screenshotsPath         string
+	opts                    []func(*chromedp.ExecAllocator)
+	runTimeout              time.Duration
+	gracefulShutdownTimeout time.Duration
 }
 
 type Options struct {
@@ -26,36 +35,112 @@ type Options struct {
 	// ChromeAllocatorOptions passed to the allocator, some default options
 	// always apply.
 	ChromeAllocatorOptions []func(*chromedp.ExecAllocator)
-	// OperationTimeout is an overall timeout for a single check for an
+	// ScenarioTimeout is an overall timeout for a single check for an
 	// appointment.
-	OperationTimeout time.Duration
+	ScenarioTimeout time.Duration
 	// DebugFunc is a function to enable and print debug to an output.
 	DebugFunc func(string, ...any)
+	// ScreenshotsPath enables creation of screenshots after the scenario
+	// run, and sets the given path in which screenshots will be stored.
+	// Each screenshot has a unique name.
+	ScreenshotsPath string
 
-	// TODO: roundtripper + port ?; baseurl !?; metrics server ?; telegram api; graceful shutdown
-	// poll timeout
+	// PollInterval sets the interval between the scenario runs.
+	PollInterval time.Duration
+	// GracefulShutdownTimeout defines duration for the shutting down the server.
+	GracefulShutdownTimeout time.Duration
+	// Port defines the HTTP port of the application.
+	Port int
+
+	// TelegramAPIToken is used to call API of Telegram™.
+	TelegramAPIToken string
+	// TelegramChatID defines the ID of the chat in which messages will be send to.
+	TelegramChatID string
 }
 
 func NewRunner(options Options) *Runner {
 	options = setDefaults(options)
 	return &Runner{
-		baseCtx:    options.BaseContext,
-		opts:       options.ChromeAllocatorOptions,
-		debugf:     options.DebugFunc,
-		runTimeout: options.OperationTimeout,
+		baseCtx:                 options.BaseContext,
+		debugf:                  options.DebugFunc,
+		port:                    strconv.Itoa(options.Port),
+		screenshotsPath:         options.ScreenshotsPath,
+		opts:                    options.ChromeAllocatorOptions,
+		runTimeout:              options.ScenarioTimeout,
+		gracefulShutdownTimeout: options.GracefulShutdownTimeout,
 	}
 }
 
-func (r *Runner) Run() (string, error) {
-	return r.RunOnce()
+var ran uint32
+
+func (r *Runner) Run(ctx context.Context) error {
+	if old := atomic.SwapUint32(&ran, 1); old != 0 {
+		return fmt.Errorf("runner is already running")
+	}
+	defer atomic.StoreUint32(&ran, 0)
+
+	server := &http.Server{
+		Addr:    r.port,
+		Handler: r.setupHandler(),
+	}
+
+	var err error
+	go func() {
+		if err = server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("listen: %s\n", err)
+		}
+	}()
+	log.Printf("server started at %q...", server.Addr)
+
+	<-ctx.Done()
+	log.Printf("shutting down the server...")
+
+	ctxShutDown, cancel := context.WithTimeout(context.Background(), r.gracefulShutdownTimeout)
+	defer func() {
+		cancel()
+	}()
+
+	server.SetKeepAlivesEnabled(false)
+	if err = server.Shutdown(ctxShutDown); err != nil {
+		log.Fatalf("server Shutdown: %s", err)
+	}
+
+	log.Printf("successfuly shutted down the server")
+
+	if errors.Is(err, http.ErrServerClosed) {
+		err = nil
+	}
+
+	return err
 }
 
-func (r *Runner) RunOnce() (string, error) {
+func (r *Runner) Handler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// TODO:
+		// telegram
+		// run_once itself + metrics
+		// polling with jitter
+	}
+}
+
+func (r *Runner) setupHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.Handle("/", r.Handler())
+
+	return mux
+}
+
+func (r *Runner) RunOnce() (string, bool, error) {
 	ctx, cancel := chromedp.NewExecAllocator(r.baseCtx, r.opts...)
 	defer cancel() // allocator
 
 	ctx, cancel = chromedp.NewContext(ctx, chromedp.WithDebugf(r.debugf))
 	defer cancel() // new tab
+
+	if err := chromedp.Run(ctx); err != nil {
+		return "", false, fmt.Errorf("initial run failed: %w", err)
+	}
 
 	ctx, cancel = context.WithTimeout(ctx, r.runTimeout)
 	defer cancel() // add timeout to avoid hanging
@@ -86,7 +171,6 @@ func (r *Runner) RunOnce() (string, error) {
 	// TODO: if no
 	memberCZSteps := getOptionsSteps("select family member citizenship", `//*[@id="xi-sel-428"]`, "Russian Federation", `//*[@id="xi-div-30"]`)
 
-	// TODO: extend case + normilize ?? and change xpaths
 	postSteps := []chromedp.Action{
 		// click on apply for a residence permit...
 		chromedp.Click(`//*[@id="xi-div-30"]/div[1]`, chromedp.BySearch),
@@ -101,9 +185,6 @@ func (r *Runner) RunOnce() (string, error) {
 		// ... click Next button to find termin...
 		chromedp.Click(`//*[@id="applicationForm:managedForm:proceed"]`, chromedp.BySearch),
 		// ...wait the result
-		// TODO: poll? /html/body/div[1], body > div.loading
-		// TODO: loading, wait until visible -> not visible
-		// TODO: >>>>>>>>>>>>><<<<<<<<<<<<<<<<<<<<<< problem!!!!!!!!!!!!!
 		chromedp.WaitVisible(`body > div.loading`, chromedp.ByQuery),
 		chromedp.WaitNotVisible(`body > div.loading`, chromedp.ByQuery),
 	}
@@ -120,17 +201,17 @@ func (r *Runner) RunOnce() (string, error) {
 		}),
 	}
 
-	// TODO: wait for the list of if success
-	var s string
-	_ = s
-	checkError := []chromedp.Action{chromedp.Sleep(time.Second * 3), chromedp.WaitReady(`//*[@id="messagesBox"]/ul/li`, chromedp.BySearch)}
-	_ = checkError
+	var nodes []*cdp.Node
+	checkMessagesBoxElem := []chromedp.Action{
+		// if the nodes will be empty then we'd found the appointment
+		chromedp.Nodes(`//*[@id="messagesBox"]`, &nodes, chromedp.BySearch, chromedp.AtLeast(0)),
+	}
 
 	var summurySteps []chromedp.Action
 	for _, stepsSlice := range [][]chromedp.Action{
 		preSteps, czSteps, applicantsNumberSteps,
 		liveInBerlinSteps, memberCZSteps, postSteps,
-		screenshotStep,
+		checkMessagesBoxElem, screenshotStep,
 	} {
 		summurySteps = append(summurySteps, stepsSlice...)
 	}
@@ -139,10 +220,10 @@ func (r *Runner) RunOnce() (string, error) {
 	summurySteps = append(summurySteps, chromedp.Location(&u))
 
 	if err := chromedp.Run(ctx, summurySteps...); err != nil {
-		return "", fmt.Errorf("failed to run chrome: %w", err)
+		return "", false, fmt.Errorf("failed to run chrome: %w", err)
 	}
 
-	return u, nil
+	return u, len(nodes) == 0, nil
 }
 
 const (
@@ -150,7 +231,10 @@ const (
 	DefaultWindowWidth  = 1200
 	DefaultWindowHeight = 800
 
-	DefaultContextTimeout = time.Minute * 5
+	DefaultPollInterval            = time.Minute * 3
+	DefaultScenarioTimeout         = time.Minute * 5
+	DefaultGracefulShutdownTimeout = time.Second * 15
+	DefaultHTTPPort                = 80
 )
 
 func setDefaults(options Options) Options {
@@ -171,16 +255,25 @@ func setDefaults(options Options) Options {
 		options.ChromeAllocatorOptions = append(requiredOptions, options.ChromeAllocatorOptions...)
 	}
 
-	if options.OperationTimeout == 0 {
-		options.OperationTimeout = DefaultContextTimeout
-	}
-	// sanity check
-	if options.OperationTimeout < time.Second*30 {
-		options.OperationTimeout = DefaultContextTimeout
+	if options.ScenarioTimeout == 0 ||
+		options.ScenarioTimeout < time.Second*30 {
+		options.ScenarioTimeout = DefaultScenarioTimeout
 	}
 
 	if options.BaseContext == nil {
 		options.BaseContext = context.Background()
+	}
+
+	if options.GracefulShutdownTimeout == 0 {
+		options.GracefulShutdownTimeout = DefaultGracefulShutdownTimeout
+	}
+
+	if options.Port == 0 {
+		options.Port = DefaultHTTPPort
+	}
+
+	if options.PollInterval == 0 {
+		options.PollInterval = DefaultPollInterval
 	}
 
 	return options
