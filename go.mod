@@ -1,6 +1,6 @@
-module github.com/zerospiel/termin-bucher-go
+module github.com/zerospiel/termin-prufen-go
 
-go 1.19
+go 1.20
 
 require (
 	github.com/chromedp/cdproto v0.0.0-20220924210414-0e3390be1777
