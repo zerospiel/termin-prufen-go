@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/chromedp"
@@ -18,6 +19,7 @@ func getOptionsSteps(
 	var nodes []*cdp.Node
 	return []chromedp.Action{
 		chromedp.Nodes(optionsSelName, &nodes, chromedp.BySearch),
+		chromedp.Sleep(time.Millisecond * 250),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			val, ok := findValueAmongNodes(nodes, searchValue)
 			if !ok {
@@ -25,7 +27,9 @@ func getOptionsSteps(
 			}
 			return chromedp.SetValue(optionsSelName, val, chromedp.BySearch).Do(ctx)
 		}),
+		chromedp.Sleep(time.Millisecond * 250),
 		chromedp.WaitVisible(awaitingNextSel, chromedp.BySearch),
+		chromedp.Sleep(time.Millisecond * 250),
 	}
 }
 

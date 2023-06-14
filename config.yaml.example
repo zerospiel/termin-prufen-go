@@ -1,0 +1,17 @@
+# ABH config example
+citizenship: "Russian Federation"
+people_number: 2
+live_in_berlin: "yes"
+family_member_citizenship: "Russian Federation"
+# reason: "apply" # "extend" is not supported
+
+# Telegram API config example
+telegram_chat_id: 12345678
+telegram_bot_token: "1234567890:qwertyuiopasdfghjklzxcvbnmQWERTYUIO"
+
+# Application config example
+# screenshots_dir: "path/to/put/screenshots/to" # mostly for debug
+scenario_timeout: 50s
+poll_interval: 5m
+# single_run_mode: false
+# debug: false
